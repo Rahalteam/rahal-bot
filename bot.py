@@ -1,51 +1,76 @@
 import os
+from flask import Flask
+import threading
 import google.generativeai as genai
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# المفاتيح بنجيبها من متغيرات البيئة في Koyeb - لا تحطها هنا
+# --- حل مشكلة No open ports في Render المجاني ---
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Rahal Bot is Live @rahalai_bot"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+threading.Thread(target=run_flask, daemon=True).start()
+# ---------------------------------------------
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "@Rahalteam2_bot")
+ADMIN_ID = os.getenv("ADMIN_ID") # اللي حطيته في Render
 
-# إعداد Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction="انت خبير في تطبيق OsmAnd للخرائط. مجموعتنا اسمها مناقشات خرائط رحال. جاوب بالعربي السعودي باختصار ومفيد جداً. اشرح خطوات عملية واضحة. اذا السؤال ليس عن الخرائط جاوب بشكل عام ومفيد."
-)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+KNOWLEDGE_FILE = "knowledge.txt"
+
+def load_knowledge():
+    if os.path.exists(KNOWLEDGE_FILE):
+        with open(KNOWLEDGE_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    return "فريق رحال فريق تطوعي أردني."
+
+def save_knowledge(text):
+    with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f:
+        f.write("\n" + text)
+
+SYSTEM_PROMPT = "انت مساعد فريق رحال الأردني. احكي لهجة أردنية بسيطة، ودودة ومختصرة."
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("أهلاً! أنا بوت رحال @rahalai_bot 🚀\nاسألني أي شي عن الفريق.")
+
+async def learn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # حماية - انت بس بتقدر تعلمه
+    if ADMIN_ID and str(update.effective_user.id) != str(ADMIN_ID):
+        await update.message.reply_text("هذا الأمر للأدمن فقط 🔒")
         return
-    
-    text = update.message.text
-    chat_type = update.message.chat.type
-    
-    # في الخاص: رد على كل شيء. في المجموعة: رد فقط اذا انذكر او سؤال
-    if chat_type != "private":
-        is_mentioned = BOT_USERNAME.lower() in text.lower() if BOT_USERNAME else False
-        is_reply_to_bot = False
-        if update.message.reply_to_message and update.message.reply_to_message.from_user:
-            username = update.message.reply_to_message.from_user.username or ""
-            is_reply_to_bot = username.lower() == BOT_USERNAME.replace("@","").lower()
-        
-        is_question = any(k in text for k in ["؟", "كيف", "OsmAnd", "خريطة", "مسار", "osm", "رسم", "تنزيل"])
-        if not (is_mentioned or is_reply_to_bot or is_question):
-            return
+    if not context.args:
+        await update.message.reply_text("استخدم: /learn المعلومة الجديدة\nمثال: /learn رحال تأسس سنة 2020")
+        return
+    info = " ".join(context.args)
+    save_knowledge(info)
+    await update.message.reply_text(f"✅ تم الحفظ: {info}")
 
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    knowledge = load_knowledge()
+    full_prompt = f"{SYSTEM_PROMPT}\n\nمعلومات عن رحال:\n{knowledge}\n\nسؤال: {user_text}"
     try:
-        response = model.generate_content(text)
-        # تيليجرام بسمح 4096 حرف فقط
-        await update.message.reply_text(response.text[:4000])
+        response = model.generate_content(full_prompt)
+        await update.message.reply_text(response.text)
     except Exception as e:
-        print(f"Error: {e}")
-        await update.message.reply_text("صار ضغط شوي على السيرفر، ارجع اسأل بعد ثانية.")
+        await update.message.reply_text("صار عندي ضغط شوي، جرب مرة ثانية.")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    print("خطأ: لازم تحط TELEGRAM_TOKEN و GEMINI_API_KEY في Environment variables في Koyeb")
-else:
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    print(f"البوت {BOT_USERNAME} شغال...")
-    app.run_polling()
+def main():
+    bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("learn", learn))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    print("Bot @rahalai_bot is running...")
+    bot_app.run_polling()
+
+if __name__ == "__main__":
+    main()
