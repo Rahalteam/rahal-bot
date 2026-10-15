@@ -7,30 +7,26 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from PIL import Image
 import pytz
 
-# سيرفر وهمي عشان Render ما يطفي البوت
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Live - Final"
+def home(): return "Bot Live - Free Chat"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 threading.Thread(target=run_flask, daemon=True).start()
 
-# التوكنات من Render
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN","").strip().strip('"').strip("'")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY","").strip().strip('"').strip("'")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID","").strip().strip('"').strip("'")
 ADMIN_IDS = [s.strip() for s in ADMIN_ID_RAW.replace(" ", "").split(",") if s.strip()]
 
 genai.configure(api_key=GEMINI_API_KEY)
-AVAILABLE_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"]
 
 KNOWLEDGE_FILE = "knowledge.txt"
 CACHE_FILE = "cache.json"
 STATUS_FILE = "bot_status.json"
 STATS_FILE = "daily_stats.json"
 
-# --- الذاكرة والملفات ---
 def load_status():
     if os.path.exists(STATUS_FILE):
         try:
@@ -60,41 +56,43 @@ def add_to_cache(q,a):
 def load_stats():
     if os.path.exists(STATS_FILE):
         try: return json.load(open(STATS_FILE, "r", encoding="utf-8"))
-        except: return {"date": str(datetime.date.today()), "total":0, "questions":[], "unknown":[]}
-    return {"date": str(datetime.date.today()), "total":0, "questions":[], "unknown":[]}
+        except: return {"date": str(datetime.date.today()), "total":0, "questions":[]}
+    return {"date": str(datetime.date.today()), "total":0, "questions":[]}
 def save_stats(s): json.dump(s, open(STATS_FILE, "w", encoding="utf-8"), ensure_ascii=False)
-def add_stat(q, unknown=False):
-    s=load_stats()
-    today=str(datetime.date.today())
-    if s["date"]!=today: s={"date":today,"total":0,"questions":[],"unknown":[]}
-    s["total"]+=1
-    if len(s["questions"])<20: s["questions"].append(q[:100])
-    if unknown and len(s["unknown"])<10: s["unknown"].append(q[:100])
-    save_stats(s)
 
 def is_trivial(text):
     if not text: return True
     t=text.strip().lower()
-    trivial_list = ["هههه","ههههه","هه","تم","تمام","ok","اوك","ابشر","هلا","سلام","😂","❤️","👍","احفظ","احفظه","احفظها","تذكر","خزن","هذه لاتقلها","هذي لاتقلها","لا تقلها","لاتقلها","لا تقل"]
-    if t in trivial_list: return True
-    if len(t)<=3: return True
-    if len(set(t))<=2 and len(t)>3 and "ه" in t: return True
+    if len(t)<=2: return True
+    if t in ["هههه","ههههه","هه","😂","❤️","👍"]: return True
     return False
 
-SYSTEM_PROMPT = "انت مساعد فريق خرائط رحال ذكي بلهجة سعودية بيضاء ومختصرة. معلوماتك فقط من الذاكرة. إذا ما تعرف الجواب قل بالضبط: لا أملك معلومة مؤكدة. حلل الصور."
+def is_order_question(text):
+    if not text: return False
+    t = text.lower()
+    keywords = ["طلبي","طلبية","طلبيتي","طلبه","طلباتي","رقم الطلب","رقم طلبي","متى يوصل","وين طلبي","فين طلبي","حالة الطلب","تتبع","الشحنة","شحنتي","توصيل","order","متى الشحن","كم باقي لطلبي"]
+    return any(k in t for k in keywords)
 
-# --- الملخص اليومي 9 بالليل لك انت بس ---
+# البوت يتكلم بحرية
+SYSTEM_PROMPT = """
+انت مساعد متجر خرائط رحال، ودود ولهجتك سعودية بيضاء.
+تتحدث بحرية عن أي شيء: تحيات، سوالف، كيف الحال، تصبح على خير، معلومات عامة، كل شي ترد عليه بشكل طبيعي وودود.
+
+معلومات إضافية عن متجرك (استخدمها إذا سئلت عن المتجر):
+{knowledge}
+
+مهم: لا تخترع حالة طلب. إذا سألك العضو عن طلبه الخاص لا تجاوب، سيتم تحويله للأدمن.
+"""
+
 async def daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
-    stats=load_stats()
-    if stats["total"]==0: return
-    unknown_text = "\n".join([f"- {u}" for u in stats.get("unknown",[])]) if stats.get("unknown") else "لا يوجد"
-    summary = f"📊 ملخص اليوم {stats['date']}\n\nعدد الأسئلة: {stats['total']}\nأكثر الأسئلة:\n- " + "\n- ".join(stats["questions"][:10]) + f"\n\n❓ أسئلة ما عرفتها:\n{unknown_text}"
+    s=load_stats()
+    if s["total"]==0: return
+    summary = f"📊 ملخص اليوم {s['date']}\nعدد الرسائل: {s['total']}"
     for aid in ADMIN_IDS:
         try: await context.bot.send_message(chat_id=int(aid), text=summary)
         except: pass
-    save_stats({"date": str(datetime.date.today()), "total":0, "questions":[], "unknown":[]})
+    save_stats({"date": str(datetime.date.today()), "total":0, "questions":[]})
 
-# --- أوامر التشغيل ---
 async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
@@ -111,14 +109,13 @@ async def arabic_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
     txt = update.message.text.strip().replace("/","")
-    if txt in ["شغل"]:
+    if txt=="شغل":
         BOT_PAUSED=False; save_status(False)
         await update.message.reply_text("🔔 اشتغلت", reply_to_message_id=update.message.message_id)
-    elif txt in ["وقف"]:
+    elif txt=="وقف":
         BOT_PAUSED=True; save_status(True)
         await update.message.reply_text("🔕 وقفت", reply_to_message_id=update.message.message_id)
 
-# --- المحادثة الرئيسية ---
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if update.effective_user.is_bot: return
@@ -126,103 +123,86 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=str(update.effective_user.id)
     chat_type=update.effective_chat.type
 
-    # 1- انت في الخاص مع البوت - يتعلم منك هنا
+    # تعليم من الخاص
     if chat_type == "private" and uid in ADMIN_IDS:
-        if user_text.startswith("/"): return
-        # رديت على سؤال حوله لك
-        if update.message.reply_to_message:
+        if update.message.reply_to_message and "السؤال:" in (update.message.reply_to_message.text or ""):
             orig = update.message.reply_to_message.text or ""
-            if orig and len(user_text)>2:
-                m = re.search(r'السؤال:\s*(.*)', orig)
-                q = m.group(1) if m else orig
-                if not is_trivial(q):
-                    save_knowledge(f"سؤال: {q}\nجواب معتمد: {user_text}")
-                    cache_data.clear(); save_cache(cache_data)
-                    await update.message.reply_text(f"✅ حفظت جواب: {q[:40]}", reply_to_message_id=update.message.message_id)
+            m = re.search(r'السؤال:\s*(.*)', orig)
+            q = m.group(1) if m else orig
+            save_knowledge(f"سؤال: {q}\nجواب معتمد: {user_text}")
+            cache_data.clear(); save_cache(cache_data)
+            await update.message.reply_text(f"✅ حفظت", reply_to_message_id=update.message.message_id)
             return
-        # كلام مباشر في الخاص
         if len(user_text)>5 and not is_trivial(user_text):
             clean = user_text
             for w in ["احفظ","تذكر","خزن"]: clean = clean.replace(w,"").strip()
-            if clean and len(clean)>3:
-                save_knowledge(clean)
-                cache_data.clear(); save_cache(cache_data)
+            if clean:
+                save_knowledge(clean); cache_data.clear(); save_cache(cache_data)
                 await update.message.reply_text("✅ حفظت في الخاص", reply_to_message_id=update.message.message_id)
         return
 
-    # 2- انت في القروب - يتعلم منك هنا أيضا
+    # تعليم من القروب بالرد
     if chat_type in ["group","supergroup"] and uid in ADMIN_IDS:
-        if update.message.reply_to_message and not update.message.reply_to_message.from_user.is_bot:
+        if update.message.reply_to_message and not update.message.reply_to_message.from_user.is_bot and len(user_text)>2:
             orig = update.message.reply_to_message.text or ""
-            if orig and len(user_text)>2 and not is_trivial(user_text):
-                save_knowledge(f"سؤال: {orig}\nجواب معتمد: {user_text}")
-                cache_data.clear(); save_cache(cache_data)
-                await update.message.reply_text("✅ تعلمت من ردك", reply_to_message_id=update.message.message_id)
-                BOT_PAUSED=True; save_status(True)
-                return
+            save_knowledge(f"سؤال: {orig}\nجواب معتمد: {user_text}")
+            cache_data.clear(); save_cache(cache_data)
+            await update.message.reply_text("✅ تعلمت", reply_to_message_id=update.message.message_id)
+            BOT_PAUSED=True; save_status(True)
+            return
         if any(w in user_text for w in ["احفظ","تذكر","خزن"]) and len(user_text)>10:
             clean=user_text
             for w in ["احفظ","تذكر","خزن"]: clean=clean.replace(w,"").strip()
-            if clean:
-                save_knowledge(clean); cache_data.clear(); save_cache(cache_data)
-                await update.message.reply_text("✅ تم الحفظ", reply_to_message_id=update.message.message_id)
+            save_knowledge(clean); cache_data.clear(); save_cache(cache_data)
+            await update.message.reply_text("✅ تم الحفظ", reply_to_message_id=update.message.message_id)
             return
-        if user_text.startswith("/"): return
-        if is_trivial(user_text): return
-        BOT_PAUSED=True; save_status(True); return
+        if not user_text.startswith("/"):
+            BOT_PAUSED=True; save_status(True); return
 
-    # 3- عضو عادي
     if BOT_PAUSED: return
     if is_trivial(user_text): return
 
-    cached=get_from_cache(user_text)
-    if cached:
-        await update.message.reply_text(cached, reply_to_message_id=update.message.message_id)
-        add_stat(user_text)
-        return
-
-    knowledge=load_knowledge()
-    full_prompt=f"{SYSTEM_PROMPT}\nمعلوماتك:\n{knowledge}\n\nسؤال العضو: {user_text}"
-    answer_text=None
-    for m in AVAILABLE_MODELS:
-        try:
-            model=genai.GenerativeModel(m)
-            res=model.generate_content(full_prompt)
-            if res.text:
-                answer_text=res.text.strip()
-                break
-        except: continue
-
-    if not answer_text or "لا أملك معلومة مؤكدة" in answer_text:
-        add_stat(user_text, unknown=True)
+    # === هنا التغيير المطلوب ===
+    # إذا سؤال عن الطلب فقط -> حول للأدمن
+    if is_order_question(user_text):
         for aid in ADMIN_IDS:
             try:
-                await context.bot.send_message(chat_id=int(aid), text=f"❓ سؤال جديد ما عرفت أجاوبه\n\nمن: {update.effective_user.first_name} (@{update.effective_user.username})\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك وأنا أحفظه")
+                await context.bot.send_message(chat_id=int(aid), text=f"📦 سؤال عن طلب\n\nمن: {update.effective_user.first_name} (@{update.effective_user.username})\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك")
             except: pass
-        await update.message.reply_text("ما عندي إجابة مؤكدة، حولت سؤالك للأدمن بيرد قريب 🙏", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text("تمام، حولت استفسارك عن الطلب للأدمن بيتابع معك شخصياً 📦", reply_to_message_id=update.message.message_id)
         return
 
-    add_to_cache(user_text, answer_text)
-    add_stat(user_text)
-    await update.message.reply_text(answer_text, reply_to_message_id=update.message.message_id)
+    # أي كلام ثاني -> يتحدث بحرية وما يحول
+    knowledge = load_knowledge()
+    prompt = SYSTEM_PROMPT.format(knowledge=knowledge) + f"\n\nرسالة العضو: {user_text}"
+
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        res = model.generate_content(prompt)
+        if res.text:
+            await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
+    except:
+        await update.message.reply_text("هلا والله، معك، تفضل وش حاب تعرف؟", reply_to_message_id=update.message.message_id)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.is_bot: return
-    if BOT_PAUSED: return
-    if str(update.effective_user.id) in ADMIN_IDS and update.effective_chat.type in ["group","supergroup"]:
-        BOT_PAUSED=True; save_status(True); return
+    if update.effective_user.is_bot or BOT_PAUSED: return
     try:
         photo_file=await update.message.photo[-1].get_file()
         await photo_file.download_to_drive("temp_photo.jpg")
         img=Image.open("temp_photo.jpg")
         caption=update.message.caption or ""
-        add_stat(caption or "صورة")
-        prompt=f"{SYSTEM_PROMPT}\nمعلومات: {load_knowledge()}\nتعليق: {caption}\nحلل الصورة"
+        if is_order_question(caption):
+            for aid in ADMIN_IDS:
+                try: await context.bot.send_message(chat_id=int(aid), text=f"📦 صورة لطلب من {update.effective_user.first_name}: {caption}")
+                except: pass
+            await update.message.reply_text("حولت صورتك للأدمن بخصوص الطلب 📦", reply_to_message_id=update.message.message_id)
+            return
+        prompt = SYSTEM_PROMPT.format(knowledge=load_knowledge()) + f"\nحلل الصورة وتعليق: {caption}"
         model=genai.GenerativeModel("gemini-2.5-flash")
         res=model.generate_content([prompt,img])
         if res.text:
             await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
-    except Exception as e: print(e)
+    except: pass
 
 def main():
     app=Application.builder().token(TELEGRAM_TOKEN).build()
@@ -236,7 +216,7 @@ def main():
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=21, minute=0, tzinfo=tz))
     except:
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=18, minute=0))
-    print(f"Running Final - Paused={BOT_PAUSED}")
+    print(f"Running Free Chat Mode - Paused={BOT_PAUSED}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__": main()
