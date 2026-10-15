@@ -3,12 +3,11 @@ from datetime import time, timezone
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
 from openai import OpenAI
 
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Rahal - Daily Backup 9PM KSA"
+def home(): return "Rahal - Fixed No Arabic Command"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
@@ -61,7 +60,6 @@ def get_answer(q):
             continue
     return facts[:1000]
 
-# === النسخ الاحتياطي اليومي ===
 async def daily_backup(context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(KNOWLEDGE_FILE):
         return
@@ -69,31 +67,28 @@ async def daily_backup(context: ContextTypes.DEFAULT_TYPE):
         with open(KNOWLEDGE_FILE,"r",encoding="utf-8") as f:
             content = f.read()
         if not content.strip():
-            content = "ما تعلم شي جديد اليوم - الملف فاضي"
-        
+            return
         for admin_id in ADMIN_IDS:
             try:
-                # لو الملف كبير ارسله كملف
                 if len(content) > 3500:
-                    # نكتب ملف مؤقت
                     tmp_path = "/tmp/rahal_backup.txt"
                     with open(tmp_path,"w",encoding="utf-8") as tmp:
                         tmp.write(content)
                     await context.bot.send_document(
                         chat_id=admin_id,
                         document=open(tmp_path,"rb"),
-                        filename=f"rahal_backup_{context.job.next_t.strftime('%Y-%m-%d')}.txt",
-                        caption=f"📚 النسخة الاحتياطية اليومية - {len(content)} حرف - كل ردودك المحفوظة"
+                        filename="rahal_backup.txt",
+                        caption=f"📚 النسخة اليومية - {len(content)} حرف"
                     )
                 else:
                     await context.bot.send_message(
                         chat_id=admin_id,
-                        text=f"📚 النسخة الاحتياطية اليومية\n{len(content)} حرف محفوظ:\n\n{content[:3500]}"
+                        text=f"📚 النسخة اليومية:\n\n{content[:3500]}"
                     )
             except Exception as e:
-                print(f"Backup send failed to {admin_id}: {e}")
+                print(f"Backup fail {admin_id}: {e}")
     except Exception as e:
-        print(f"Daily backup error: {e}")
+        print(f"Daily error: {e}")
 
 async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS:
@@ -107,35 +102,37 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_path = "/tmp/rahal_export.txt"
         with open(tmp_path,"w",encoding="utf-8") as tmp:
             tmp.write(content)
-        await update.message.reply_document(
-            document=open(tmp_path,"rb"),
-            filename="rahal_knowledge.txt",
-            caption="كل ردودك المحفوظة"
-        )
+        await update.message.reply_document(document=open(tmp_path,"rb"), filename="rahal_knowledge.txt")
     else:
-        await update.message.reply_text(content[:4000])
+        await update.message.reply_text(content[:4000] if content else "فاضي")
 
 async def post_init(app: Application):
     try: await app.bot.delete_webhook(drop_pending_updates=True)
     except: pass
-    # كل يوم 9 مساء بتوقيت السعودية = 6 مساء UTC
     try:
         app.job_queue.run_daily(
             daily_backup,
             time=time(hour=18, minute=0, tzinfo=timezone.utc),
-            name="daily_backup_9pm_ksa"
+            name="daily_backup"
         )
         print("Daily backup scheduled 9PM KSA")
     except Exception as e:
-        print(f"Scheduling failed: {e}")
+        print(f"Scheduling fail: {e}")
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ شغال - يحفظ ردودك فقط + نسخة يومية 9 مساء على الخاص", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text("✅ شغال - يحفظ ردود المشرف + نسخة يومية 9 مساء", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.is_bot: return
     text = update.message.text or ""
-    if not text or text.startswith("/"): return
+    if not text:
+        return
+    # امر تصدير بالعربي بدون CommandHandler
+    if text.strip() in ["تصدير", "تصدير البيانات", "نسخة"]:
+        await export_cmd(update, context)
+        return
+    if text.startswith("/"):
+        return
     uid = str(update.effective_user.id)
     chat_type = update.effective_chat.type
     is_admin = uid in ADMIN_IDS
@@ -153,7 +150,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clean = text.replace("احفظ","").strip(" :")
         if len(clean)>5:
             save_admin_reply("", clean)
-            await update.message.reply_text(f"✅ حفظت: {clean[:600]}")
+            await update.message.reply_text(f"✅ حفظت")
         return
 
     if not is_admin:
@@ -164,9 +161,9 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
-    app.add_handler(CommandHandler("تصدير", export_cmd))
+    # لا يوجد CommandHandler عربي هنا - هذا كان سبب الخطأ
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    print("Bot with daily backup ready")
+    print("Bot fixed ready")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
