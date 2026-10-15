@@ -1,3 +1,4 @@
 Flask
 python-telegram-bot==21.9
 openai
+apscheduler
