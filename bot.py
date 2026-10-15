@@ -1,39 +1,75 @@
-import os, json, re
+import os, json, re, random
 from flask import Flask
 import threading
-from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# نحاول نستورد openai - لو مو موجود يشتغل بدون ذكاء
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except:
+    HAS_OPENAI = False
+
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Rahal Bot Working"
+def home(): return "Rahal Cheap AI Bot"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 threading.Thread(target=run_flask, daemon=True).start()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN","").strip().strip('"').strip("'")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY","").strip().strip('"').strip("'")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID","").strip().strip('"').strip("'")
 ADMIN_IDS = [s.strip() for s in ADMIN_ID_RAW.replace(" ", "").split(",") if s.strip()]
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+# اختار مزود الذكاء من المتغيرات - Groq مجاني افتراضي
+AI_PROVIDER = os.getenv("AI_PROVIDER","groq").lower() # groq, deepseek, openai, openrouter
+GROQ_KEY = os.getenv("GROQ_API_KEY","").strip()
+DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY","").strip()
+OPENAI_KEY = os.getenv("OPENAI_API_KEY","").strip()
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY","").strip()
 
-DEFAULT_KNOWLEDGE = """
-متجر خرائط رحال - www.RahalTeam.com
+def get_ai_client():
+    if not HAS_OPENAI: return None, None
+    if AI_PROVIDER == "groq" and GROQ_KEY:
+        return OpenAI(api_key=GROQ_KEY, base_url="https://api.groq.com/openai/v1"), "llama-3.3-70b-versatile"
+    if AI_PROVIDER == "deepseek" and DEEPSEEK_KEY:
+        return OpenAI(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com"), "deepseek-chat"
+    if AI_PROVIDER == "openai" and OPENAI_KEY:
+        return OpenAI(api_key=OPENAI_KEY), "gpt-4o-mini"
+    if AI_PROVIDER == "openrouter" and OPENROUTER_KEY:
+        return OpenAI(api_key=OPENROUTER_KEY, base_url="https://openrouter.ai/api/v1"), "deepseek/deepseek-chat"
+    # محاولة تلقائية - يشوف اي مفتاح موجود
+    if GROQ_KEY:
+        return OpenAI(api_key=GROQ_KEY, base_url="https://api.groq.com/openai/v1"), "llama-3.3-70b-versatile"
+    if DEEPSEEK_KEY:
+        return OpenAI(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com"), "deepseek-chat"
+    if OPENAI_KEY:
+        return OpenAI(api_key=OPENAI_KEY), "gpt-4o-mini"
+    if OPENROUTER_KEY:
+        return OpenAI(api_key=OPENROUTER_KEY, base_url="https://openrouter.ai/api/v1"), "deepseek/deepseek-chat"
+    return None, None
 
-الشراء من الموقع: تدخل www.RahalTeam.com تختار الخريطة تضيف للسلة تكمل الدفع (مدى، فيزا) يوصلك كود.
+KNOWLEDGE_BASE = {
+    "ايفون": """📱 شرح التثبيت للايفون:
 
-شرح الشراء والتثبيت من الموقع الالكتروني:
-رابط الموقع 👇 www.RahalTeam.com
-شرح فيديو 👇 https://youtu.be/8TEil-9tsfY
-شرح التثبيت لخرائط رحال للايفون من متجر رحال لتطبيق اوسماند.
-رابط متجر رحال للأندرويد والأيفون وهواوي وشاشات السيارات https://RahalTeam.com
+1- الشراء من الموقع الالكتروني 👇
+www.RahalTeam.com
 
-التثبيت للايفون: من موقع RahalTeam.com بعد الشراء يجيك رابط تفتحه في تطبيق OsmAnd
-التثبيت للأندرويد: نفس الموقع، يحمل ملف الخريطة ويفتح في OsmAnd
-"""
+2- شرح فيديو 👇
+https://youtu.be/8TEil-9tsfY
+
+3- بعد الشراء يجيك رابط، افتحه في تطبيق OsmAnd.
+
+https://RahalTeam.com""",
+    "تثبيت": """📱 شرح التثبيت:
+للايفون: www.RahalTeam.com + https://youtu.be/8TEil-9tsfY
+للأندرويد وهواوي: https://RahalTeam.com حمل الملف وافتحه في OsmAnd""",
+    "شراء": """🛒 الشراء من www.RahalTeam.com
+اختر الخريطة > اضف للسلة > ادفع (مدى/فيزا) > يوصلك الكود""",
+    "خريطة": "🗺️ خرائط رحال في www.RahalTeam.com اختر منطقتك",
+}
 
 KNOWLEDGE_FILE = "knowledge.txt"
 STATUS_FILE = "bot_status.json"
@@ -55,163 +91,149 @@ def load_file_knowledge():
     return ""
 def save_knowledge(t):
     with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f: f.write("\n" + t + "\n---\n")
-def clear_file_knowledge():
-    open(KNOWLEDGE_FILE, "w", encoding="utf-8").close()
 
-def get_all_knowledge():
-    return DEFAULT_KNOWLEDGE + "\n---\n" + load_file_knowledge()
-
-def get_relevant(query, all_text):
-    chunks = [c.strip() for c in all_text.split("---") if c.strip()]
+def get_relevant(query):
     q = query.lower()
-    if not any(k in q for k in ["شرح","تثبيت","ايفون","اندرويد","رابط","موقع","شراء","كيف","طريقة"]):
-        if any(k in q for k in ["مرحبا","هلا","سلام","شكرا","كيفك","طيب","ممتاز","تصبح"]):
-            return ""
-    scored = []
-    for ch in chunks:
-        cl = ch.lower()
-        score = 0
-        if "ايفون" in q and "ايفون" in cl: score += 20
-        if "تثبيت" in q and "تثبيت" in cl: score += 15
-        if "شراء" in q and "شراء" in cl: score += 10
-        if "youtu.be" in cl or "RahalTeam" in ch: score += 5
-        for w in re.findall(r'\w+', q):
-            if len(w)>2 and w in cl: score+=1
-        scored.append((score,ch))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    rel = [c for s,c in scored if s>0][:2]
-    return "\n---\n".join(rel)
+    # ابحث في الملف اولا
+    file_k = load_file_knowledge()
+    if file_k:
+        chunks = [c.strip() for c in file_k.split("---") if c.strip()]
+        for ch in chunks[::-1]:
+            cl = ch.lower()
+            if any(w in q for w in ["ايفون","تثبيت","شراء","خريطة"]) and any(w in cl for w in ["ايفون","تثبيت","http","www"]):
+                if sum(1 for w in re.findall(r'\w+', q) if len(w)>2 and w in cl) >= 1:
+                    return ch
+    if any(k in q for k in ["ايفون"]): return KNOWLEDGE_BASE["ايفون"]
+    if "تثبيت" in q: return KNOWLEDGE_BASE["تثبيت"]
+    if "شراء" in q: return KNOWLEDGE_BASE["شراء"]
+    if "خريطة" in q or "اريد" in q: return KNOWLEDGE_BASE["خريطة"]
+    return None
 
-def ask_gemini(prompt):
+def ask_cheap_ai(prompt, relevant=None):
+    client, model = get_ai_client()
+    if not client: return None
     try:
-        res = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-        return res.text
+        system = "انت بوت خرائط رحال، سعودي ودود، ترد بحرية ومختصر، لا تكرر نفس الجملة."
+        if relevant:
+            system += f"\nمعلومات مهمة استخدمها مع روابطها حرفيا:\n{relevant}"
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        return resp.choices[0].message.content
     except Exception as e:
-        print(f"Gemini Error: {e}")
+        print(f"AI Error {model}: {e}")
         return None
 
-SYSTEM_PROMPT = """
-انت بوت خرائط رحال الذكي، ترد بلهجة سعودية ودودة ومتنوعة، لا تكرر نفس الجملة.
-
-اذا اعطيتك معلومات محفوظة استخدمها حرفيا مع روابطها.
-اذا ما فيه معلومات محفوظة، جاوب بشكل حر وذكي.
-"""
+async def post_init(application: Application):
+    try: await application.bot.delete_webhook(drop_pending_updates=True)
+    except: pass
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client, model = get_ai_client()
+    ai_status = f"ذكاء شغال ✅ {model}" if client else "ذكاء مطفي (يرد من الذاكرة فقط)"
     status = "موقف ⏸️" if BOT_PAUSED else "شغال ✅"
-    await update.message.reply_text(f"بوت رحال {status}\n/on لتشغيل\n/off لإيقاف\n/clear لمسح الذاكرة الإضافية\n/memory لعرض الذاكرة", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text(f"رحال {status}\n{ai_status}\n\n/on\n/off\n/memory\n/save", reply_to_message_id=update.message.message_id)
 
 async def on_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
-    if str(update.effective_user.id) not in ADMIN_IDS: 
-        await update.message.reply_text("فقط الأدمن يقدر يشغلني", reply_to_message_id=update.message.message_id)
-        return
+    if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED=False; save_status(False)
-    await update.message.reply_text("اشتغلت ✅ الآن أرد على الجميع", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text("اشتغلت ✅", reply_to_message_id=update.message.message_id)
 
 async def off_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED=True; save_status(True)
-    await update.message.reply_text("وقفت ⏸️ اكتب /on لتشغيلي", reply_to_message_id=update.message.message_id)
-
-async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) not in ADMIN_IDS: return
-    clear_file_knowledge()
-    await update.message.reply_text("✅ مسحت الذاكرة الإضافية", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text("وقفت ⏸️", reply_to_message_id=update.message.message_id)
 
 async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS: return
-    all_k = get_all_knowledge()
-    await update.message.reply_text(all_k[:3500], reply_to_message_id=update.message.message_id)
+    fk = load_file_knowledge() or "لا يوجد اضافي"
+    await update.message.reply_text(fk[:3500], reply_to_message_id=update.message.message_id)
 
-async def arabic_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_PAUSED
+async def save_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS: return
-    txt = update.message.text.strip().lower().replace("/","")
-    if txt in ["شغل","تشغيل","on"]:
-        BOT_PAUSED=False; save_status(False)
-        await update.message.reply_text("اشتغلت ✅", reply_to_message_id=update.message.message_id)
-    elif txt in ["وقف","ايقاف","off"]:
-        BOT_PAUSED=True; save_status(True)
-        await update.message.reply_text("وقفت ⏸️", reply_to_message_id=update.message.message_id)
-    elif txt in ["مسح","امسح"]:
-        clear_file_knowledge()
-        await update.message.reply_text("✅ تم المسح", reply_to_message_id=update.message.message_id)
+    text = " ".join(context.args)
+    if not text: 
+        await update.message.reply_text("استخدم: /save النص", reply_to_message_id=update.message.message_id)
+        return
+    save_knowledge(text)
+    await update.message.reply_text(f"✅ حفظت:\n{text[:1000]}", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
-    if update.effective_user.is_bot: 
-        return
+    if update.effective_user.is_bot: return
     user_text = update.message.text or ""
     uid = str(update.effective_user.id)
     chat_type = update.effective_chat.type
     low = user_text.strip().lower()
 
-    # الخاص - الأدمن
     if chat_type == "private" and uid in ADMIN_IDS:
-        if low in ["مسح","امسح","احذف"]:
-            clear_file_knowledge()
-            await update.message.reply_text("✅ مسحت الإضافي", reply_to_message_id=update.message.message_id)
+        if low in ["مسح","امسح"]:
+            open(KNOWLEDGE_FILE, "w", encoding="utf-8").close()
+            await update.message.reply_text("✅ مسحت", reply_to_message_id=update.message.message_id)
             return
-        if low.startswith(("احفظ","تذكر","خزن")):
-            clean = user_text
-            for w in ["احفظ","تذكر","خزن"]: clean = clean.replace(w,"").strip(" :")
+        if user_text.startswith("احفظ") or low.startswith("احفظ"):
+            clean = user_text.replace("احفظ","").strip(" :")
             if len(clean)>2:
                 save_knowledge(clean)
-                await update.message.reply_text(f"✅ حفظت:\n{clean[:1000]}", reply_to_message_id=update.message.message_id)
+                await update.message.reply_text(f"✅ حفظت:\n{clean[:1200]}", reply_to_message_id=update.message.message_id)
             return
-        # في الخاص يرد حتى لو موقف في القروبات
-        # لا نعمل return للـ paused هنا
     else:
-        # في القروبات فقط نحترم الوقف
-        if BOT_PAUSED:
+        if BOT_PAUSED: return
+
+    # 1- لو السؤال عن شرح او رابط - جاوب مباشرة بدون ما تدفع API
+    relevant = get_relevant(user_text)
+    if relevant and any(k in low for k in ["تثبيت","ايفون","شراء","رابط","خريطة"]):
+        if "http" in relevant or "www" in relevant:
+            await update.message.reply_text(relevant, reply_to_message_id=update.message.message_id)
             return
 
-    # تحويل طلبات
-    if any(k in low for k in ["طلبي","رقم الطلب","وين طلبي"]):
-        for aid in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=int(aid), text=f"📦 طلب: {user_text} من {update.effective_user.first_name}")
-            except: pass
-        await update.message.reply_text("حولت سؤالك للأدمن 📦", reply_to_message_id=update.message.message_id)
+    # 2- لو تحية بسيطة - رد متنوع بدون API
+    if any(k in low for k in ["سلام","مرحبا","هلا","صباح","مساء","شكرا","اخبارك"]):
+        if relevant: # فيه رد من المعرفة
+            pass
+        else:
+            greetings = {
+                "سلام": ["وعليكم السلام ورحمة الله حياك","هلا وعليكم السلام"],
+                "مرحبا": ["هلا والله نورت","يا هلا حياك","مرحبا مليون"],
+                "صباح": ["صباح النور","صباح الورد حياك"],
+                "شكرا": ["العفو حاضرين","العفو يا غالي"],
+                "اخبارك": ["بخير الله يسعدك","تمام الحمدلله"]
+            }
+            for k,v in greetings.items():
+                if k in low:
+                    await update.message.reply_text(random.choice(v), reply_to_message_id=update.message.message_id)
+                    return
+
+    # 3- لو سؤال جديد - استخدم الذكاء الرخيص
+    ai_ans = ask_cheap_ai(user_text, relevant)
+    if ai_ans:
+        await update.message.reply_text(ai_ans, reply_to_message_id=update.message.message_id)
         return
 
-    all_knowledge = get_all_knowledge()
-    relevant = get_relevant(user_text, all_knowledge)
-
+    # 4- Fallback لو الذكاء فاصل
     if relevant:
-        prompt = f"""{SYSTEM_PROMPT}
-معلومات محفوظة:
-{relevant}
-
-المستخدم: {user_text}
-رد باستخدام المعلومات المحفوظة مع روابطها حرفيا وبشكل حر:"""
+        await update.message.reply_text(relevant, reply_to_message_id=update.message.message_id)
     else:
-        prompt = f"""{SYSTEM_PROMPT}
-المستخدم: {user_text}
-رد بشكل حر ومتنوع:"""
-
-    ans = ask_gemini(prompt)
-    if ans:
-        await update.message.reply_text(ans, reply_to_message_id=update.message.message_id)
-    else:
-        # رد احتياطي متنوع
-        if "سلام" in low: await update.message.reply_text("وعليكم السلام ورحمة الله حياك", reply_to_message_id=update.message.message_id)
-        elif "مرحبا" in low or "هلا" in low: await update.message.reply_text("هلا والله نورت", reply_to_message_id=update.message.message_id)
-        elif "شكرا" in low: await update.message.reply_text("العفو حاضرين", reply_to_message_id=update.message.message_id)
-        else: await update.message.reply_text("هلا والله، تفضل كيف أقدر أساعدك؟", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text("هلا والله حياك، وش تبي تعرف عن خرائط رحال؟\nقل: شرح التثبيت للايفون", reply_to_message_id=update.message.message_id)
 
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("on", on_cmd))
     app.add_handler(CommandHandler("off", off_cmd))
-    app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(CommandHandler("memory", memory_cmd))
-    app.add_handler(MessageHandler(filters.Regex(r'^(/?شغل|/?وقف|/?مسح|/?امسح)$'), arabic_control))
+    app.add_handler(CommandHandler("save", save_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    print("Rahal Working Bot - No auto pause")
-    app.run_polling(drop_pending_updates=True)
+    print("Rahal Cheap AI Bot Ready")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
