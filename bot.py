@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Free Chat OK"
+def home(): return "Bot Free Chat Fixed"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
@@ -45,33 +45,21 @@ def clear_knowledge():
     open(KNOWLEDGE_FILE, "w", encoding="utf-8").close()
     if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
-def load_cache():
-    if os.path.exists(CACHE_FILE):
-        try: return json.load(open(CACHE_FILE, "r", encoding="utf-8"))
-        except: return {}
-    return {}
-def save_cache(c):
-    with open(CACHE_FILE, "w", encoding="utf-8") as f: json.dump(c, f, ensure_ascii=False)
-cache_data = load_cache()
-
 def is_order_question(text):
     if not text: return False
     t = text.lower()
     keywords = ["طلبي","طلبية","رقم الطلب","وين طلبي","فين طلبي","متى يوصل","تتبع","الشحنة","شحنتي","توصيل"]
     return any(k in t for k in keywords)
 
-# هذا يخليه يسولف حر + يستخدم ذاكرتك
 SYSTEM_PROMPT = """
 انت مساعد ذكي وودود لمتجر خرائط رحال، ترد بلهجة سعودية بيضاء بشكل حر وطبيعي ومحترف.
 
-مهمتك:
-- ترد على التحيات: مرحبا، السلام عليكم، هلا، كيفك، ممتاز، طيب، تصبح على خير، تصبح خير.. رد بتحية مناسبة وطبيعية ومتنوعة، لا تكرر نفس الجملة.
-- تشرح اي شيء: شرح الشراء، طرق الدفع، الخرائط، اي سؤال عام جاوب بذكاء من عندك.
-- عندك ذاكرة اضافية علمك بها الادمن في الخاص:
+ترد على التحيات: مرحبا، السلام عليكم، هلا، كيفك، ممتاز، طيب، تصبح على خير.. رد بتحية مناسبة ومتنوعة.
+تشرح اي شيء: شرح الشراء، طرق الدفع، الخرائط، اي سؤال عام جاوب بذكاء من عندك.
+عندك ذاكرة اضافية علمك بها الادمن في الخاص:
 {knowledge}
-اذا فيها معلومة تناسب السؤال استخدمها اولاً.
-
-- اذا سأل عن طلبه الخاص (وين طلبي) لا تجاوب انت، قل سيتم تحويلك للادمن.
+اذا فيها معلومة تناسب السؤال استخدمها اولا.
+اذا سأل عن طلبه الخاص قل سيتم تحويلك للادمن.
 """
 
 MODEL_NAME = "gemini-1.5-flash"
@@ -91,7 +79,21 @@ async def off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS: return
     clear_knowledge()
-    await update.message.reply_text("✅ تم مسح جميع التعليمات القديمة\nالآن البوت فاضي وبيسولف حر، علمه من جديد بـ: احفظ", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text("✅ تم مسح جميع التعليمات\nالآن البوت يسولف حر، علمه بـ: احفظ", reply_to_message_id=update.message.message_id)
+
+async def arabic_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_PAUSED
+    if str(update.effective_user.id) not in ADMIN_IDS: return
+    txt = update.message.text.strip().lower().replace("/","")
+    if txt in ["شغل","تشغيل"]:
+        BOT_PAUSED=False; save_status(False)
+        await update.message.reply_text("اشتغلت", reply_to_message_id=update.message.message_id)
+    elif txt in ["وقف","ايقاف","طفي"]:
+        BOT_PAUSED=True; save_status(True)
+        await update.message.reply_text("وقفت", reply_to_message_id=update.message.message_id)
+    elif txt in ["مسح","امسح","احذف","احذف جميع التعليمات"]:
+        clear_knowledge()
+        await update.message.reply_text("✅ تم مسح جميع التعليمات\nالآن البوت يسولف حر", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
@@ -101,11 +103,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type=update.effective_chat.type
     low = user_text.strip().lower()
 
-    # الخاص - الادمن يعلم
     if chat_type == "private" and uid in ADMIN_IDS:
         if low in ["مسح","امسح","احذف","احذف جميع التعليمات","مسح الكل"]:
             clear_knowledge()
-            await update.message.reply_text("✅ مسحت كل شيء، البوت الآن يسولف حر بدون ذاكرة قديمة\nعلمه الآن: احفظ المعلومة", reply_to_message_id=update.message.message_id)
+            await update.message.reply_text("✅ مسحت كل شيء", reply_to_message_id=update.message.message_id)
             return
         if low.startswith(("احفظ","تذكر","خزن")):
             clean = user_text
@@ -138,21 +139,18 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = model.generate_content(prompt)
         if res.text and res.text.strip():
             await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
-        else:
-            await update.message.reply_text("هلا والله، معك تفضل", reply_to_message_id=update.message.message_id)
     except Exception as e:
-        # لو صار خطأ يعلمنا السبب الحقيقي مو هلا والله
         print(f"Gemini Error: {e}")
-        await update.message.reply_text("هلا والله، حياك، وش تبي تعرف؟", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text("هلا والله حياك، تفضل وش تبي تعرف؟", reply_to_message_id=update.message.message_id)
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("on", on_command))
     app.add_handler(CommandHandler("off", off_command))
     app.add_handler(CommandHandler("clear", clear_cmd))
-    app.add_handler(CommandHandler("مسح", clear_cmd))
+    app.add_handler(MessageHandler(filters.Regex(r'^(/?شغل|/?وقف|/?مسح|/?امسح|/?احذف)$'), arabic_control))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    print(f"Running FREE CHAT {MODEL_NAME}")
+    print(f"Running Fixed Free {MODEL_NAME}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
