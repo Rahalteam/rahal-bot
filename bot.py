@@ -7,14 +7,16 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from PIL import Image
 import pytz
 
+# سيرفر وهمي عشان Render ما يطفي البوت
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Live - Fixed"
+def home(): return "Bot Live - Final"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 threading.Thread(target=run_flask, daemon=True).start()
 
+# التوكنات من Render
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN","").strip().strip('"').strip("'")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY","").strip().strip('"').strip("'")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID","").strip().strip('"').strip("'")
@@ -28,6 +30,7 @@ CACHE_FILE = "cache.json"
 STATUS_FILE = "bot_status.json"
 STATS_FILE = "daily_stats.json"
 
+# --- الذاكرة والملفات ---
 def load_status():
     if os.path.exists(STATUS_FILE):
         try:
@@ -39,7 +42,7 @@ BOT_PAUSED = load_status()
 
 def load_knowledge(): return open(KNOWLEDGE_FILE, "r", encoding="utf-8").read() if os.path.exists(KNOWLEDGE_FILE) else ""
 def save_knowledge(t):
-    with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f: f.write("\n" + t)
+    with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f: f.write("\n" + t + "\n---")
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -72,13 +75,15 @@ def add_stat(q, unknown=False):
 def is_trivial(text):
     if not text: return True
     t=text.strip().lower()
-    if len(t)<=2: return True
-    if t in ["هههه","ههههه","هه","تم","تمام","ok","اوك","ابشر","هلا","سلام","😂","❤️","👍"]: return True
+    trivial_list = ["هههه","ههههه","هه","تم","تمام","ok","اوك","ابشر","هلا","سلام","😂","❤️","👍","احفظ","احفظه","احفظها","تذكر","خزن","هذه لاتقلها","هذي لاتقلها","لا تقلها","لاتقلها","لا تقل"]
+    if t in trivial_list: return True
+    if len(t)<=3: return True
     if len(set(t))<=2 and len(t)>3 and "ه" in t: return True
     return False
 
-SYSTEM_PROMPT = "انت مساعد فريق ذكي بلهجة سعودية بيضاء ومختصرة. إذا ما تعرف الجواب قل بالضبط: لا أملك معلومة مؤكدة. حلل الصور."
+SYSTEM_PROMPT = "انت مساعد فريق خرائط رحال ذكي بلهجة سعودية بيضاء ومختصرة. معلوماتك فقط من الذاكرة. إذا ما تعرف الجواب قل بالضبط: لا أملك معلومة مؤكدة. حلل الصور."
 
+# --- الملخص اليومي 9 بالليل لك انت بس ---
 async def daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     stats=load_stats()
     if stats["total"]==0: return
@@ -89,6 +94,7 @@ async def daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         except: pass
     save_stats({"date": str(datetime.date.today()), "total":0, "questions":[], "unknown":[]})
 
+# --- أوامر التشغيل ---
 async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
@@ -104,14 +110,15 @@ async def off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def arabic_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
-    txt = update.message.text.strip()
-    if txt in ["/شغل", "شغل"]:
+    txt = update.message.text.strip().replace("/","")
+    if txt in ["شغل"]:
         BOT_PAUSED=False; save_status(False)
         await update.message.reply_text("🔔 اشتغلت", reply_to_message_id=update.message.message_id)
-    elif txt in ["/وقف", "وقف"]:
+    elif txt in ["وقف"]:
         BOT_PAUSED=True; save_status(True)
         await update.message.reply_text("🔕 وقفت", reply_to_message_id=update.message.message_id)
 
+# --- المحادثة الرئيسية ---
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if update.effective_user.is_bot: return
@@ -119,28 +126,52 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=str(update.effective_user.id)
     chat_type=update.effective_chat.type
 
-    if uid in ADMIN_IDS and update.message.reply_to_message:
-        orig = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-        if orig and not update.message.reply_to_message.from_user.is_bot and len(user_text)>5:
-            save_knowledge(f"سؤال: {orig}\nجواب معتمد: {user_text}\n---")
-            cache_data.clear(); save_cache(cache_data)
-            await update.message.reply_text("✅ تعلمت وحفظت جوابك", reply_to_message_id=update.message.message_id)
-            if chat_type != "private":
-                BOT_PAUSED=True; save_status(True)
+    # 1- انت في الخاص مع البوت - يتعلم منك هنا
+    if chat_type == "private" and uid in ADMIN_IDS:
+        if user_text.startswith("/"): return
+        # رديت على سؤال حوله لك
+        if update.message.reply_to_message:
+            orig = update.message.reply_to_message.text or ""
+            if orig and len(user_text)>2:
+                m = re.search(r'السؤال:\s*(.*)', orig)
+                q = m.group(1) if m else orig
+                if not is_trivial(q):
+                    save_knowledge(f"سؤال: {q}\nجواب معتمد: {user_text}")
+                    cache_data.clear(); save_cache(cache_data)
+                    await update.message.reply_text(f"✅ حفظت جواب: {q[:40]}", reply_to_message_id=update.message.message_id)
             return
+        # كلام مباشر في الخاص
+        if len(user_text)>5 and not is_trivial(user_text):
+            clean = user_text
+            for w in ["احفظ","تذكر","خزن"]: clean = clean.replace(w,"").strip()
+            if clean and len(clean)>3:
+                save_knowledge(clean)
+                cache_data.clear(); save_cache(cache_data)
+                await update.message.reply_text("✅ حفظت في الخاص", reply_to_message_id=update.message.message_id)
+        return
 
+    # 2- انت في القروب - يتعلم منك هنا أيضا
     if chat_type in ["group","supergroup"] and uid in ADMIN_IDS:
-        if any(w in user_text for w in ["احفظ","تذكر","خزن"]):
+        if update.message.reply_to_message and not update.message.reply_to_message.from_user.is_bot:
+            orig = update.message.reply_to_message.text or ""
+            if orig and len(user_text)>2 and not is_trivial(user_text):
+                save_knowledge(f"سؤال: {orig}\nجواب معتمد: {user_text}")
+                cache_data.clear(); save_cache(cache_data)
+                await update.message.reply_text("✅ تعلمت من ردك", reply_to_message_id=update.message.message_id)
+                BOT_PAUSED=True; save_status(True)
+                return
+        if any(w in user_text for w in ["احفظ","تذكر","خزن"]) and len(user_text)>10:
             clean=user_text
             for w in ["احفظ","تذكر","خزن"]: clean=clean.replace(w,"").strip()
             if clean:
                 save_knowledge(clean); cache_data.clear(); save_cache(cache_data)
                 await update.message.reply_text("✅ تم الحفظ", reply_to_message_id=update.message.message_id)
             return
-        if user_text.startswith("/on") or user_text.startswith("/off"): return
-        if user_text in ["/شغل","/وقف","شغل","وقف"]: return
+        if user_text.startswith("/"): return
+        if is_trivial(user_text): return
         BOT_PAUSED=True; save_status(True); return
 
+    # 3- عضو عادي
     if BOT_PAUSED: return
     if is_trivial(user_text): return
 
@@ -151,14 +182,14 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     knowledge=load_knowledge()
-    full_prompt=f"{SYSTEM_PROMPT}\nمعلوماتك: {knowledge}\nسؤال: {user_text}"
+    full_prompt=f"{SYSTEM_PROMPT}\nمعلوماتك:\n{knowledge}\n\nسؤال العضو: {user_text}"
     answer_text=None
     for m in AVAILABLE_MODELS:
         try:
             model=genai.GenerativeModel(m)
             res=model.generate_content(full_prompt)
             if res.text:
-                answer_text=res.text
+                answer_text=res.text.strip()
                 break
         except: continue
 
@@ -166,7 +197,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_stat(user_text, unknown=True)
         for aid in ADMIN_IDS:
             try:
-                await context.bot.send_message(chat_id=int(aid), text=f"❓ سؤال جديد ما عرفت أجاوبه\n\nمن: {update.effective_user.first_name}\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك")
+                await context.bot.send_message(chat_id=int(aid), text=f"❓ سؤال جديد ما عرفت أجاوبه\n\nمن: {update.effective_user.first_name} (@{update.effective_user.username})\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك وأنا أحفظه")
             except: pass
         await update.message.reply_text("ما عندي إجابة مؤكدة، حولت سؤالك للأدمن بيرد قريب 🙏", reply_to_message_id=update.message.message_id)
         return
@@ -191,15 +222,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res=model.generate_content([prompt,img])
         if res.text:
             await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
-    except: pass
+    except Exception as e: print(e)
 
 def main():
     app=Application.builder().token(TELEGRAM_TOKEN).build()
-    # الأوامر الإنجليزية فقط هنا
     app.add_handler(CommandHandler("on", on_command))
     app.add_handler(CommandHandler("off", off_command))
-    # الأوامر العربية نعالجها كرسالة عادية
-    app.add_handler(MessageHandler(filters.Regex(r'^/(شغل|وقف)$'), arabic_commands))
+    app.add_handler(MessageHandler(filters.Regex(r'^/?(شغل|وقف)$'), arabic_commands))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     try:
@@ -207,7 +236,7 @@ def main():
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=21, minute=0, tzinfo=tz))
     except:
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=18, minute=0))
-    print(f"Running Fixed - Paused={BOT_PAUSED}")
+    print(f"Running Final - Paused={BOT_PAUSED}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__": main()
