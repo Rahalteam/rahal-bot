@@ -1,13 +1,13 @@
 import os, json, re
 from flask import Flask
 import threading
-import google.generativeai as genai
+from google import genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Free Chat Fixed"
+def home(): return "Bot Free OK New SDK"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
@@ -18,10 +18,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY","").strip().strip('"').strip("'")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID","").strip().strip('"').strip("'")
 ADMIN_IDS = [s.strip() for s in ADMIN_ID_RAW.replace(" ", "").split(",") if s.strip()]
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 KNOWLEDGE_FILE = "knowledge.txt"
-CACHE_FILE = "cache.json"
 STATUS_FILE = "bot_status.json"
 
 def load_status():
@@ -43,26 +42,36 @@ def save_knowledge(t):
     with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f: f.write("\n" + t + "\n---")
 def clear_knowledge():
     open(KNOWLEDGE_FILE, "w", encoding="utf-8").close()
-    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
 
 def is_order_question(text):
     if not text: return False
     t = text.lower()
-    keywords = ["طلبي","طلبية","رقم الطلب","وين طلبي","فين طلبي","متى يوصل","تتبع","الشحنة","شحنتي","توصيل"]
+    keywords = ["طلبي","طلبية","رقم الطلب","وين طلبي","فين طلبي","متى يوصل","تتبع","الشحنة","شحنتي"]
     return any(k in t for k in keywords)
 
+def ask_gemini(prompt):
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return None
+
 SYSTEM_PROMPT = """
-انت مساعد ذكي وودود لمتجر خرائط رحال، ترد بلهجة سعودية بيضاء بشكل حر وطبيعي ومحترف.
+انت مساعد ذكي لمتجر خرائط رحال، لهجتك سعودية ودودة وطبيعية.
 
-ترد على التحيات: مرحبا، السلام عليكم، هلا، كيفك، ممتاز، طيب، تصبح على خير.. رد بتحية مناسبة ومتنوعة.
-تشرح اي شيء: شرح الشراء، طرق الدفع، الخرائط، اي سؤال عام جاوب بذكاء من عندك.
-عندك ذاكرة اضافية علمك بها الادمن في الخاص:
+- لا تكرر نفس الجملة ابدا. نوع ردودك.
+- اذا قال مرحبا قل هلا والله نورت، اذا قال شكرا لك قل العفو حاضرين، اذا قال السلام عليكم قل وعليكم السلام ورحمة الله، اذا قال تصبح على خير قل وانت من اهل الخير.
+- اذا قال اريد شرح اشرح له خطوات الشراء من المتجر بذكاء من عندك.
+- اذا قال ممتاز او طيب قل الله يسعدك، اي خدمة ثانية؟
+- ترد بشكل حر وذكي ومختصر.
+
+معلومات اضافية علمك بها الادمن:
 {knowledge}
-اذا فيها معلومة تناسب السؤال استخدمها اولا.
-اذا سأل عن طلبه الخاص قل سيتم تحويلك للادمن.
 """
-
-MODEL_NAME = "gemini-1.5-flash"
 
 async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
@@ -79,7 +88,7 @@ async def off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS: return
     clear_knowledge()
-    await update.message.reply_text("✅ تم مسح جميع التعليمات\nالآن البوت يسولف حر، علمه بـ: احفظ", reply_to_message_id=update.message.message_id)
+    await update.message.reply_text("✅ تم مسح كل التعليمات القديمة، الآن البوت نظيف ويسولف حر", reply_to_message_id=update.message.message_id)
 
 async def arabic_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
@@ -88,12 +97,12 @@ async def arabic_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if txt in ["شغل","تشغيل"]:
         BOT_PAUSED=False; save_status(False)
         await update.message.reply_text("اشتغلت", reply_to_message_id=update.message.message_id)
-    elif txt in ["وقف","ايقاف","طفي"]:
+    elif txt in ["وقف","ايقاف"]:
         BOT_PAUSED=True; save_status(True)
         await update.message.reply_text("وقفت", reply_to_message_id=update.message.message_id)
-    elif txt in ["مسح","امسح","احذف","احذف جميع التعليمات"]:
+    elif txt in ["مسح","امسح","احذف"]:
         clear_knowledge()
-        await update.message.reply_text("✅ تم مسح جميع التعليمات\nالآن البوت يسولف حر", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text("✅ تم المسح، البوت صار نظيف ويسولف حر", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
@@ -104,7 +113,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     low = user_text.strip().lower()
 
     if chat_type == "private" and uid in ADMIN_IDS:
-        if low in ["مسح","امسح","احذف","احذف جميع التعليمات","مسح الكل"]:
+        if low in ["مسح","امسح","احذف","احذف جميع التعليمات"]:
             clear_knowledge()
             await update.message.reply_text("✅ مسحت كل شيء", reply_to_message_id=update.message.message_id)
             return
@@ -115,33 +124,29 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_knowledge(clean)
                 await update.message.reply_text(f"✅ حفظت:\n{clean}", reply_to_message_id=update.message.message_id)
             return
-        if update.message.reply_to_message and "السؤال:" in (update.message.reply_to_message.text or ""):
-            orig = update.message.reply_to_message.text or ""
-            m = re.search(r'السؤال:\s*(.*)', orig)
-            q = m.group(1) if m else orig
-            save_knowledge(f"سؤال: {q}\nجواب: {user_text}")
-            await update.message.reply_text("✅ حفظت الجواب", reply_to_message_id=update.message.message_id)
-            return
 
     if BOT_PAUSED: return
-
     if is_order_question(user_text):
         for aid in ADMIN_IDS:
-            try: await context.bot.send_message(chat_id=int(aid), text=f"📦 سؤال طلب من {update.effective_user.first_name}: {user_text}")
+            try: await context.bot.send_message(chat_id=int(aid), text=f"📦 سؤال طلب: {user_text}")
             except: pass
-        await update.message.reply_text("حولت سؤالك عن الطلب للأدمن 📦", reply_to_message_id=update.message.message_id)
+        await update.message.reply_text("حولت سؤالك للأدمن 📦", reply_to_message_id=update.message.message_id)
         return
 
     knowledge = load_knowledge()
-    prompt = SYSTEM_PROMPT.format(knowledge=knowledge) + f"\nرسالة المستخدم: {user_text}"
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        res = model.generate_content(prompt)
-        if res.text and res.text.strip():
-            await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
-    except Exception as e:
-        print(f"Gemini Error: {e}")
-        await update.message.reply_text("هلا والله حياك، تفضل وش تبي تعرف؟", reply_to_message_id=update.message.message_id)
+    prompt = SYSTEM_PROMPT.format(knowledge=knowledge) + f"\nالمستخدم قال: {user_text}\nردك:"
+    
+    answer = ask_gemini(prompt)
+    if answer:
+        await update.message.reply_text(answer, reply_to_message_id=update.message.message_id)
+    else:
+        # رد احتياطي متنوع لو فشل gemini
+        if "مرحبا" in low: await update.message.reply_text("هلا والله، نورت", reply_to_message_id=update.message.message_id)
+        elif "سلام" in low: await update.message.reply_text("وعليكم السلام ورحمة الله، حياك", reply_to_message_id=update.message.message_id)
+        elif "شكرا" in low: await update.message.reply_text("العفو، حاضرين", reply_to_message_id=update.message.message_id)
+        elif "شرح" in low: await update.message.reply_text("تدخل المتجر، تختار الخريطة اللي تبيها، تضيفها للسلة، وتكمل الدفع، ويوصلك الطلب", reply_to_message_id=update.message.message_id)
+        elif "ممتاز" in low or "طيب" in low: await update.message.reply_text("الله يسعدك، أي خدمة ثانية؟", reply_to_message_id=update.message.message_id)
+        else: await update.message.reply_text("هلا بك، تفضل", reply_to_message_id=update.message.message_id)
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -150,7 +155,7 @@ def main():
     app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^(/?شغل|/?وقف|/?مسح|/?امسح|/?احذف)$'), arabic_control))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    print(f"Running Fixed Free {MODEL_NAME}")
+    print("Running New SDK gemini-2.0-flash")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
