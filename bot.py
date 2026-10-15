@@ -5,10 +5,9 @@ import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# إبقاء البوت شغال في Render
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Live - Auto Reply Safe"
+def home(): return "Bot Live - Thread Reply"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
@@ -61,49 +60,31 @@ def add_to_cache(q, a):
     cache_data[hashlib.md5(q.lower().strip().encode()).hexdigest()] = a
     save_cache(cache_data)
 
-SYSTEM_PROMPT = "انت مساعد ذكي ودود ومختصر. تحدث بلهجة سعودية بسيطة وبيضاء. ممنوع تذكر جنسيتك وممنوع تذكر أي معلومات خاصة نهائياً حتى لو سألك أحد."
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("هلا! أرد تلقائي على أي أحد بدون منشن")
+SYSTEM_PROMPT = "انت مساعد ذكي ودود ومختصر. تحدث بلهجة سعودية بسيطة وبيضاء. ممنوع تذكر جنسيتك وممنوع تذكر أي معلومات خاصة نهائياً."
 
 async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED = False
     save_status(False)
-    await update.message.reply_text("🔔 اشتغلت، أرد على أي أحد تلقائي الحين")
+    await update.message.reply_text("🔔 اشتغلت، أرد على أي أحد في نفس رسالته", reply_to_message_id=update.message.message_id)
 
 async def off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED = True
     save_status(True)
-    await update.message.reply_text("🔕 وقفت، ما أرد على أي أحد لين تكتب /on")
-
-async def learn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) not in ADMIN_IDS: return
-    if not context.args: return
-    info = " ".join(context.args)
-    save_knowledge(info)
-    cache_data.clear(); save_cache(cache_data)
-    await update.message.reply_text("✅ تم الحفظ")
+    await update.message.reply_text("🔕 وقفت، ما أرد على أي أحد لين تكتب /on", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
-    
-    # 1- أهم حماية: تجاهل أي بوت ثاني
-    if update.effective_user.is_bot:
-        return
-
+    if update.effective_user.is_bot: return
     user_text = update.message.text or ""
     uid = str(update.effective_user.id)
     chat_type = update.effective_chat.type
 
-    # 2- إذا موقف ما يرد على أي أحد
-    if BOT_PAUSED:
-        return
+    if BOT_PAUSED: return
 
-    # 3- إذا الأدمن تدخل في القروب يسكت تلقائي
     if chat_type in ["group", "supergroup"] and uid in ADMIN_IDS:
         if any(w in user_text for w in ["احفظ","تذكر","خزن"]):
             clean = user_text
@@ -111,18 +92,17 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if clean:
                 save_knowledge(clean)
                 cache_data.clear(); save_cache(cache_data)
-                await update.message.reply_text("✅ تم الحفظ")
+                await update.message.reply_text("✅ تم الحفظ", reply_to_message_id=update.message.message_id)
             return
-        if user_text.startswith("/on") or user_text.startswith("/off"):
-            return
+        if user_text.startswith("/on") or user_text.startswith("/off"): return
         BOT_PAUSED = True
         save_status(True)
         return
 
-    # 4- يرد تلقائي على أي شخص بدون منشن
     cached = get_from_cache(user_text)
     if cached:
-        await update.message.reply_text(cached)
+        # يرد في نفس رسالة العضو
+        await update.message.reply_text(cached, reply_to_message_id=update.message.message_id)
         return
 
     knowledge = load_knowledge()
@@ -134,18 +114,17 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = model.generate_content(full_prompt)
             if res.text:
                 add_to_cache(user_text, res.text)
-                await update.message.reply_text(res.text)
+                # الحركة الجديدة: رد في الثريد
+                await update.message.reply_text(res.text, reply_to_message_id=update.message.message_id)
                 return
         except: continue
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["on","شغل"], on_command))
     app.add_handler(CommandHandler(["off","وقف"], off_command))
-    app.add_handler(CommandHandler("learn", learn))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    print(f"Running - AutoReply - Ignore Bots - Paused={BOT_PAUSED}")
+    print(f"Running Thread Mode - Paused={BOT_PAUSED}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
