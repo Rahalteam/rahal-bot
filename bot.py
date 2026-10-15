@@ -9,7 +9,7 @@ import pytz
 
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Bot Live"
+def home(): return "Bot Live - Fixed"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
@@ -94,11 +94,23 @@ async def on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED=False; save_status(False)
     await update.message.reply_text("🔔 اشتغلت", reply_to_message_id=update.message.message_id)
+
 async def off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
     if str(update.effective_user.id) not in ADMIN_IDS: return
     BOT_PAUSED=True; save_status(True)
     await update.message.reply_text("🔕 وقفت", reply_to_message_id=update.message.message_id)
+
+async def arabic_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_PAUSED
+    if str(update.effective_user.id) not in ADMIN_IDS: return
+    txt = update.message.text.strip()
+    if txt in ["/شغل", "شغل"]:
+        BOT_PAUSED=False; save_status(False)
+        await update.message.reply_text("🔔 اشتغلت", reply_to_message_id=update.message.message_id)
+    elif txt in ["/وقف", "وقف"]:
+        BOT_PAUSED=True; save_status(True)
+        await update.message.reply_text("🔕 وقفت", reply_to_message_id=update.message.message_id)
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_PAUSED
@@ -107,7 +119,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=str(update.effective_user.id)
     chat_type=update.effective_chat.type
 
-    # التعلم منك: ترد Reply على أي سؤال
     if uid in ADMIN_IDS and update.message.reply_to_message:
         orig = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
         if orig and not update.message.reply_to_message.from_user.is_bot and len(user_text)>5:
@@ -127,6 +138,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ تم الحفظ", reply_to_message_id=update.message.message_id)
             return
         if user_text.startswith("/on") or user_text.startswith("/off"): return
+        if user_text in ["/شغل","/وقف","شغل","وقف"]: return
         BOT_PAUSED=True; save_status(True); return
 
     if BOT_PAUSED: return
@@ -154,7 +166,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_stat(user_text, unknown=True)
         for aid in ADMIN_IDS:
             try:
-                await context.bot.send_message(chat_id=int(aid), text=f"❓ سؤال جديد ما عرفت أجاوبه\n\nمن: {update.effective_user.first_name}\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك وأنا أحفظه")
+                await context.bot.send_message(chat_id=int(aid), text=f"❓ سؤال جديد ما عرفت أجاوبه\n\nمن: {update.effective_user.first_name}\nالسؤال: {user_text}\n\nرد على هذه الرسالة بجوابك")
             except: pass
         await update.message.reply_text("ما عندي إجابة مؤكدة، حولت سؤالك للأدمن بيرد قريب 🙏", reply_to_message_id=update.message.message_id)
         return
@@ -183,8 +195,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app=Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler(["on","شغل"], on_command))
-    app.add_handler(CommandHandler(["off","وقف"], off_command))
+    # الأوامر الإنجليزية فقط هنا
+    app.add_handler(CommandHandler("on", on_command))
+    app.add_handler(CommandHandler("off", off_command))
+    # الأوامر العربية نعالجها كرسالة عادية
+    app.add_handler(MessageHandler(filters.Regex(r'^/(شغل|وقف)$'), arabic_commands))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     try:
@@ -192,7 +207,7 @@ def main():
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=21, minute=0, tzinfo=tz))
     except:
         app.job_queue.run_daily(daily_summary_job, time=datetime.time(hour=18, minute=0))
-    print(f"Running - Paused={BOT_PAUSED}")
+    print(f"Running Fixed - Paused={BOT_PAUSED}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__": main()
