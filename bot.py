@@ -7,7 +7,20 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # حط ايدي تليجرامك هنا في Secrets
+
+# FIX: يدعم ايدي واحد او اكثر مفصول بفاصلة
+admin_raw = os.getenv("ADMIN_ID", "0")
+ADMIN_IDS = []
+for part in admin_raw.replace(",", " ").split():
+    part=part.strip()
+    if part.isdigit():
+        try:
+            ADMIN_IDS.append(int(part))
+        except:
+            pass
+if not ADMIN_IDS:
+    ADMIN_IDS = [0]
+
 AMMAN_TZ = pytz.timezone("Asia/Amman")
 
 KNOWLEDGE_FILE = "knowledge/learned.json"
@@ -30,7 +43,6 @@ def save_knowledge(q, a):
         data = data[-500:]
     with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"Saved: {q} -> {a}")
 
 GREETINGS = ["صباح الخير","صباح النور","مساء الخير","السلام عليكم","هلا","مرحبا","اهلا","السلام","صباح","مساء"]
 
@@ -40,27 +52,23 @@ def is_greeting(text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if ADMIN_ID != 0 and uid == ADMIN_ID:
+    if uid in ADMIN_IDS:
         await update.message.reply_text(
             f"هلا يا شادي! 👑 انت الادمن (ID: {uid})\n"
             "هنا تتكلم معي بحرية وتعطيني معلومات.\n\n"
             "طريقة التعليم:\n"
             "اكتب: السؤال | الجواب\n"
-            "مثال:\n"
-            "كيف اثبت الخريطة | ادخل RahalTeam.com وحمل الملف وفك الضغط\n\n"
-            "أو تكلم معي عادي وراح اتعلم منك."
+            "مثال: كيف اثبت الخريطة | ادخل RahalTeam.com\n\n"
+            "الايديهات المسموحة: " + str(ADMIN_IDS)
         )
     else:
-        await update.message.reply_text(
-            "هلا والله حياك في خرائط رحال 🗺️\n"
-            "أقدر أساعدك في التثبيت والخرائط. وش ودك تعرف؟"
-        )
+        await update.message.reply_text("هلا والله حياك في خرائط رحال 🗺️\nوش ودك تعرف؟")
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"الايدي حقك: {update.effective_user.id}\nارسله لي احطه في ADMIN_ID")
+    await update.message.reply_text(f"الايدي حقك: {update.effective_user.id}")
 
 async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if ADMIN_ID !=0 and update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_IDS and 0 not in ADMIN_IDS:
         return
     data = load_knowledge()[-20:]
     if not data:
@@ -77,50 +85,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_id = update.effective_user.id
-    is_admin = (ADMIN_ID != 0 and user_id == ADMIN_ID) or ADMIN_ID == 0  # لو ما حطيت ADMIN_ID يعتبر الكل ادمن مؤقتا
+    is_admin = user_id in ADMIN_IDS or 0 in ADMIN_IDS
 
-    # ====== وضع الادمن (انت) تتكلم بحرية ======
+    # وضع الادمن
     if is_admin:
-        # لو كتب بصيغة تعليم: سؤال | جواب
         if "|" in text and len(text.split("|")) == 2:
             q, a = text.split("|", 1)
             if len(q.strip()) > 2 and len(a.strip()) > 2:
                 save_knowledge(q, a)
-                await update.message.reply_text(f"تم الحفظ ✅\nس: {q.strip()}\nج: {a.strip()}\n\nالزباين الحين بيستفيدون منه")
+                await update.message.reply_text(f"تم الحفظ ✅\nس: {q.strip()}\nج: {a.strip()}")
                 return
-        
-        # لو كتب احفظ: ...
-        if text.startswith("احفظ") or text.startswith("علم"):
-            # نحاول نستخرج بعد الكلمة
-            cleaned = text.replace("احفظ", "").replace("علم", "").replace(":", "").strip()
-            if "|" in cleaned:
-                q, a = cleaned.split("|", 1)
-                save_knowledge(q, a)
-                await update.message.reply_text(f"تم الحفظ ✅\nس: {q.strip()}")
-                return
-
-        # كلام حر مع الادمن - نموذج ذكي يتكلم بحرية
         if GROQ_KEY:
             try:
                 from groq import Groq
                 client = Groq(api_key=GROQ_KEY)
-                # محادثة حرة بدون قيود رحال
                 completion = client.chat.completions.create(
                     model="llama-3.1-8b-instant",
                     messages=[
-                        {"role": "system", "content": "أنت مساعد ذكي حر تابع لشادي. تكلم بحرية وذكاء وبلهجة سعودية ودودة. انت تتعلم من شادي عشان بعدين تجاوب الزباين. اذا اعطاك معلومة احفظها في ذاكرتك."},
+                        {"role": "system", "content": "أنت مساعد ذكي حر تابع لشادي. تكلم بحرية وذكاء وبلهجة سعودية ودودة."},
                         {"role": "user", "content": text}
                     ],
                     max_tokens=600,
                     temperature=0.8
                 )
-                reply = completion.choices[0].message.content
-                await update.message.reply_text(reply)
+                await update.message.reply_text(completion.choices[0].message.content)
                 return
             except Exception as e:
                 print(e)
 
-    # ====== وضع الزبون العادي ======
     if is_greeting(text):
         await update.message.reply_text(f"{text} هلا والله صباح النور 🌹 حياك في خرائط رحال، آمرني؟")
         return
@@ -134,18 +126,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from groq import Groq
             client = Groq(api_key=GROQ_KEY)
             completion = client.chat.completions.create(
-                model="llama-3.1-8b-instant",  # 14,400 رسالة
+                model="llama-3.1-8b-instant",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "أنت مساعد خرائط رحال الرسمي. اسمك رحال. لهجتك سعودية ودودة. "
-                            "لا تقل بخصوص. لا ترسل رابط اليوتيوب الا اذا سأل عن التثبيت. "
-                            "موقعك RahalTeam.com وشرح التثبيت https://youtu.be/8TEil-9tsfY "
-                            "جاوب باختصار 2-4 اسطر. استخدم المعلومات المحفوظة التالية:\n"
-                            f"{context_text}"
-                        )
-                    },
+                    {"role": "system", "content": f"أنت مساعد خرائط رحال الرسمي. اسمك رحال. لهجتك سعودية ودودة. موقعك RahalTeam.com وشرح التثبيت https://youtu.be/8TEil-9tsfY جاوب باختصار 2-4 اسطر. معلومات محفوظة:\n{context_text}"},
                     {"role": "user", "content": text}
                 ],
                 max_tokens=400,
@@ -161,7 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply_text)
 
 def main():
-    print("Rahal Bot - Admin Free Mode + 14,400 msgs")
+    print(f"Rahal Bot Ready - Admins: {ADMIN_IDS} - 14,400/day")
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", id_cmd))
