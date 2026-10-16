@@ -44,7 +44,7 @@ def call_groq(system_prompt, user_text, max_tokens=600):
         raise Exception("GROQ_API_KEY فاضي")
     from groq import Groq
     client=Groq(api_key=GROQ_KEY)
-    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192", "mixtral-8x7b-32768"]
+    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192"]
     last_err=None
     for model in models:
         try:
